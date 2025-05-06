@@ -126,6 +126,40 @@ def jira_settings():
     3. Give your token a name (e.g., "Fortune 1000 RAG App")
     4. Copy the generated token and paste it in the field above
     """)
+    
+    st.markdown("---")
+    
+    st.subheader("Jira Assistant")
+    
+    agent = init_jira_agent()
+    
+    if agent and agent.is_initialized():
+        st.write("You can ask questions about your Jira projects, issues, or perform tasks:")
+        
+        st.markdown("""
+        **Example commands:**
+        - Create a new bug in project PROJ with summary "Login page crashes on mobile devices" and priority High
+        - Assign ticket PROJ-123 to John Smith
+        - Update the status of PROJ-456 to "In Progress"
+        - Show all blockers in the current sprint for project MARKETING
+        - List all issues assigned to me that are due this week
+        """)
+        
+        jira_query = st.text_area("Ask a question about Jira:", height=80)
+        
+        if st.button("Submit Jira Query"):
+            if jira_query:
+                with st.spinner("Processing your Jira query..."):
+                    try:
+                        response = agent.query(jira_query)
+                        st.write("### Response")
+                        st.markdown(response)
+                    except Exception as e:
+                        st.error(f"Error processing your query: {str(e)}")
+            else:
+                st.warning("Please enter a question about Jira.")
+    else:
+        st.info("Complete your Jira connection setup above to use the Jira Assistant.")
 
 def main():
     st.set_page_config(page_title="Dataset SQL Assistant", layout="wide")
