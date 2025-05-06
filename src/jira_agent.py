@@ -14,17 +14,13 @@ class JiraQueryAgent:
             api_key: Google API key for Gemini
             jira_config: Configuration for Jira
         """
-        # Set the API key
         os.environ["GOOGLE_API_KEY"] = api_key
         
-        # Set JIRA environment variables
         os.environ["JIRA_API_TOKEN"] = jira_config.get("api_token", "")
         os.environ["JIRA_USERNAME"] = jira_config.get("username", "")
         
-        # Set JIRA instance URL
         os.environ["JIRA_INSTANCE_URL"] = jira_config.get("instance_url", "")
         
-        # Set JIRA cloud flag
         os.environ["JIRA_CLOUD"] = str(jira_config.get("is_cloud", True))
         
         # Initialize LLM
@@ -95,22 +91,16 @@ class JiraQueryAgent:
             return {"status": "error", "message": self.error_message}
         
         try:
-            # Get projects safely
             projects = self.jira.jira.projects()
             
-            # Extract project names, handling potential differences in structure
             project_names = []
             for project in projects[:5]:
-                # Handle if project is a dictionary
                 if isinstance(project, dict) and "name" in project:
                     project_names.append(project["name"])
-                # Handle if project is an object with name attribute
                 elif hasattr(project, "name"):
                     project_names.append(project.name)
-                # Handle if project is an object with key attribute
                 elif hasattr(project, "key"):
                     project_names.append(project.key)
-                # If we can't extract a name, use a placeholder
                 else:
                     project_names.append("Project " + str(projects.index(project) + 1))
             

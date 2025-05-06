@@ -3,7 +3,7 @@ import sys
 import streamlit as st
 import pandas as pd
 from dotenv import load_dotenv
-from src.load_data import load_csv_to_sqlite, get_table_info
+from src.load_data import load_all_csvs_to_sqlite, get_all_tables_info, debug_database
 from src.sql_agent import SQLQueryAgent
 from src.jira_agent import JiraQueryAgent
 
@@ -11,38 +11,47 @@ from src.jira_agent import JiraQueryAgent
 load_dotenv()
 
 # Constants
-DB_PATH = "fortune1000.db"
-TABLE_NAME = "fortune1000"
-CSV_PATH = "data/fortune1000_2024.csv"
+DB_PATH = "datasets.db"
+DATA_FOLDER = "data"
 
 def setup_database():
-    """Set up the database if it doesn't exist"""
-    if not os.path.exists(DB_PATH):
-        try:
-            # Load CSV to SQLite
-            df, engine = load_csv_to_sqlite(CSV_PATH, DB_PATH, TABLE_NAME)
-            st.success("Database created successfully!")
+    """Set up the database with all CSV files from the data folder"""
+    try:
+        tables_info = load_all_csvs_to_sqlite(DATA_FOLDER, DB_PATH)
+        if tables_info:
+            st.success(f"Successfully loaded {len(tables_info)} datasets into the database.")
+            
+            # Debug database structure after loading
+            debug_database(DB_PATH)
+            
             return True
-        except Exception as e:
-            st.error(f"Error creating database: {str(e)}")
+        else:
+            st.warning("No CSV files found in the data folder. Please add CSV files to the 'data' directory.")
             return False
-    return True
+    except Exception as e:
+        st.error(f"Error setting up database: {str(e)}")
+        return False
 
 def init_agent():
     """Initialize the SQL agent"""
-    api_key = os.getenv("GOOGLE_API_KEY")
+    # Get info about all tables
+    tables_info = get_all_tables_info(DB_PATH)
+    
+    if 'GOOGLE_API_KEY' not in st.session_state:
+        st.session_state.GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
+    
+    api_key = st.session_state.GOOGLE_API_KEY
     
     if not api_key:
-        st.warning("Google API Key not found. Please enter it below:")
-        api_key = st.text_input("Google API Key", type="password")
-        if not api_key:
-            return None
+        api_key = st.text_input("Enter your Google API Key:", type="password")
+        if api_key:
+            st.session_state.GOOGLE_API_KEY = api_key
     
-    # Get table information to help the agent
-    table_info = get_table_info(DB_PATH, TABLE_NAME)
-    
-    # Create the agent
-    return SQLQueryAgent(DB_PATH, api_key, table_info)
+    if api_key:
+        agent = SQLQueryAgent(api_key, DB_PATH, tables_info)
+        return agent
+    else:
+        return None
 
 def init_jira_agent():
     """Initialize the Jira agent with stored credentials"""
@@ -119,120 +128,58 @@ def jira_settings():
     """)
 
 def main():
-    st.set_page_config(
-        page_title="Fortune 1000 SQL & Jira Assistant",
-        page_icon="📊",
-        layout="wide"
-    )
+    st.set_page_config(page_title="Dataset SQL Assistant", layout="wide")
     
-    st.title("Fortune 1000 SQL & Jira Assistant")
+    st.title("Dataset SQL Assistant")
+    st.sidebar.title("Options")
+
+    if st.sidebar.button("Debug Database"):
+        debug_database(DB_PATH)
+
+    has_data = setup_database()
     
-    # Create tabs for SQL and Jira functionality
-    tab1, tab2 = st.tabs(["Fortune 1000 Data", "Jira Integration"])
+    if has_data:
+        agent = init_agent()
+    else:
+        agent = None
+    
+    tab1, tab2 = st.tabs(["Query Datasets", "Jira Settings"])
     
     with tab1:
-        st.markdown("""
-        Ask questions about the Fortune 1000 companies dataset using natural language.
-        This assistant uses LangChain with Gemini to answer your questions by generating SQL queries behind the scenes.
-        """)
-        
-        # Setup database
-        db_ready = setup_database()
-        if not db_ready:
-            st.stop()
-        
-        # Initialize agent
-        agent = init_agent()
-        if not agent:
-            st.stop()
-        
-        # Input for user question
-        question = st.text_area("Ask a question about Fortune 1000 companies:", 
-                            "Which companies in the technology sector have the highest revenue?")
-        
-        if st.button("Get Answer"):
-            if question:
-                with st.spinner("Generating answer..."):
-                    # Get answer from the agent
-                    answer = agent.query(question)
-                    st.markdown("### Answer")
-                    st.write(answer)
+        if has_data and agent:
+            st.header("Ask questions about your datasets")
+            
+            tables_info = get_all_tables_info(DB_PATH)
+            dataset_names = [table['name'].replace('_', ' ').title() for table in tables_info]
+            
+            st.write("Available datasets:")
+            for name in dataset_names:
+                st.write(f"- {name}")
+            
+            query = st.text_area("Ask a question about your data:", height=80)
+            if st.button("Submit"):
+                if query:
+                    with st.spinner("Generating response..."):
+                        result = agent.query(query)
+                        st.write("### Answer")
+                        st.write(result["answer"])
+                        
+                        with st.expander("SQL Query Used"):
+                            st.code(result["sql_query"], language="sql")
+                        
+                        if "data" in result and result["data"] is not None and not result["data"].empty:
+                            st.write("### Data")
+                            st.dataframe(result["data"])
+                else:
+                    st.warning("Please enter a question.")
+        else:
+            if not has_data:
+                st.info("Please add CSV files to the 'data' directory to get started.")
             else:
-                st.warning("Please enter a question.")
-        
-        # Example questions
-        st.markdown("### Example Questions")
-        examples = [
-            "Which 5 companies have the highest market value?",
-            "How many companies are in each sector?",
-            "What is the total revenue of companies in the Energy sector?",
-            "Which states have the most Fortune 1000 company headquarters?",
-            "Which Fortune 1000 companies are led by female CEOs?",
-            "How many employees does Walmart have?"
-        ]
-        
-        cols = st.columns(3)
-        for i, example in enumerate(examples):
-            col_idx = i % 3
-            if cols[col_idx].button(example, key=f"example_{i}"):
-                with st.spinner("Generating answer..."):
-                    # Get answer from the agent
-                    answer = agent.query(example)
-                    st.markdown("### Answer")
-                    st.write(answer)
+                st.info("Please enter your Google API key in the sidebar to enable the assistant.")
     
     with tab2:
-        st.markdown("""
-        Connect to your Jira instance and ask questions or perform actions using natural language.
-        This assistant uses LangChain with Gemini to interact with your Jira projects.
-        """)
-        
-        # Jira settings - no longer in an expander to avoid nesting issues
-        st.subheader("Jira Settings")
         jira_settings()
-        
-        st.markdown("---")  # Add a horizontal line for visual separation
-        
-        # Initialize Jira agent
-        jira_agent = init_jira_agent()
-        
-        if jira_agent and jira_agent.is_initialized():
-            # Input for Jira question
-            jira_question = st.text_area("Ask a question or give a command for Jira:", 
-                                     "List my top 5 highest priority issues")
-            
-            if st.button("Send to Jira"):
-                if jira_question:
-                    with st.spinner("Communicating with Jira..."):
-                        # Get answer from the agent
-                        answer = jira_agent.query(jira_question)
-                        st.markdown("### Response")
-                        st.write(answer)
-                else:
-                    st.warning("Please enter a question or command.")
-            
-            # Example Jira questions
-            st.markdown("### Example Jira Commands")
-            jira_examples = [
-                "List all projects",
-                "Find issues assigned to me",
-                "Create a new bug ticket in project XYZ about login failures",
-                "Search for issues with 'performance' in the summary",
-                "What are my open issues with high priority?",
-                "Show recent activity on project ABC"
-            ]
-            
-            cols = st.columns(2)
-            for i, example in enumerate(jira_examples):
-                col_idx = i % 2
-                if cols[col_idx].button(example, key=f"jira_example_{i}"):
-                    with st.spinner("Communicating with Jira..."):
-                        # Get answer from the agent
-                        answer = jira_agent.query(example)
-                        st.markdown("### Response")
-                        st.write(answer)
-        else:
-            st.info("Please configure your Jira credentials in the settings above to enable Jira integration.")
 
 if __name__ == "__main__":
     main()

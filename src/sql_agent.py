@@ -1,185 +1,168 @@
 import os
-from typing import Dict, List, Any
-from langchain_community.agent_toolkits import create_sql_agent
-from langchain_community.utilities import SQLDatabase
-from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain.chains import LLMChain
-from langchain.prompts import PromptTemplate
 import pandas as pd
+import sqlite3
 import re
+from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_core.prompts import ChatPromptTemplate
+from langchain.chains import LLMChain
 
 class SQLQueryAgent:
-    def __init__(self, db_path: str, api_key: str, table_info: Dict = None):
+    def __init__(self, api_key, db_path, tables_info):
         """
-        Initialize the SQL Query Agent with Gemini Flash
+        Initialize the SQL Query Agent with multiple tables support
         
         Args:
-            db_path: Path to SQLite database
             api_key: Google API key for Gemini
-            table_info: Optional information about the table structure
+            db_path: Path to SQLite database
+            tables_info: List of dictionaries containing table information
         """
-        # Set the API key
-        os.environ["GOOGLE_API_KEY"] = api_key
-        
-        # Connect to the database
-        self.db = SQLDatabase.from_uri(f"sqlite:///{db_path}")
         self.db_path = db_path
+        self.tables_info = tables_info
         
-        # Initialize Gemini LLM
         self.llm = ChatGoogleGenerativeAI(
-            model="gemini-1.5-flash", 
-            temperature=0.1,
-            convert_system_message_to_human=True
+            model="gemini-1.5-flash",
+            google_api_key=api_key,
+            temperature=0.2
         )
         
-        # Store table information for context
-        self.table_info = table_info
-        
-        # Create the SQL agent
-        self.agent = create_sql_agent(
-            llm=self.llm,
-            db=self.db,
-            agent_type="openai-tools",
-            verbose=False
-        )
+        self.create_prompt_templates()
     
-    def _generate_system_prompt(self, query: str) -> str:
-        """Generate a detailed system prompt to guide the LLM"""
+    def create_prompt_templates(self):
+        """Create the prompt templates for the LLM"""
         
-        base_prompt = """You are a helpful SQL expert. You will be given a database schema and a user question.
-Your task is to write SQL to query the database to answer the user's question accurately.
-
-Database Schema:
-- Table: {table_name}
-- Columns: {columns}
-
-Think step by step:
-1. Understand the question and identify the relevant columns needed
-2. Consider any filters or conditions required
-3. Determine if aggregations, groupings, or joins are necessary
-4. Write a clean SQL query to answer the question
-5. After getting results, provide a clear, concise explanation in natural language
-
-User question: {query}
-"""
+        tables_description = ""
+        for table in self.tables_info:
+            tables_description += f"Table: {table['name']}\n"
+            tables_description += f"Columns: {', '.join(table['columns'])}\n\n"
+            
+            if table['sample_data']:
+                tables_description += "Sample data (first few rows):\n"
+                sample_rows = []
+                for row in table['sample_data'][:3]:  # Limit to 3 rows for brevity
+                    sample_rows.append(str(row))
+                tables_description += "\n".join(sample_rows)
+                tables_description += "\n\n"
         
-        if self.table_info:
-            return base_prompt.format(
-                table_name=self.table_info["name"],
-                columns=", ".join(self.table_info["columns"]),
-                query=query
-            )
-        else:
-            return base_prompt.format(
-                table_name="fortune1000",
-                columns="unknown - will explore database schema",
-                query=query
-            )
+        # SQL generation prompt 
+        sql_prompt_template = """
+        You are a helpful SQL assistant that generates SQL queries based on natural language questions.
+
+        Available tables in the database:
+        {tables_description}
+
+        Based on the above schema, write a SQL query to answer the following question:
+        {question}
+
+        Important guidelines:
+        1. Determine which table(s) would be appropriate to query based on the question
+        2. Use case-insensitive comparisons (LIKE with UPPER/LOWER or COLLATE NOCASE) for string searches
+        3. Consider adding wildcards (%term%) when searching for company names or text fields
+        4. Return ONLY the SQL query without any explanations - just the raw SQL query
+
+        Example:
+        For searching a company name like "Walmart", use:
+        SELECT * FROM fortune1000_2024 WHERE UPPER(company) LIKE UPPER('%Walmart%')
+        """
+        
+        self.sql_prompt = ChatPromptTemplate.from_template(sql_prompt_template)
+        
+        # Answer generation prompt
+        answer_prompt_template = """
+        You are a helpful data analysis assistant.
+
+        The user asked: {question}
+
+        The following SQL query was used to retrieve data from the database:
+        {sql_query}
+
+        The query returned the following results:
+        {query_results}
+
+        Please provide a clear, concise, and accurate answer to the user's question based on these results.
+        Include specific numbers and facts from the data.
+        If the query didn't return any results, suggest one of the following possibilities:
+        1. There might be a spelling variation or case sensitivity issue
+        2. The data might be in a different table than expected
+        3. The information might not be present in the dataset
+        
+        Keep your answer focused on the data from the query results.
+        """
+        
+        self.answer_prompt = ChatPromptTemplate.from_template(answer_prompt_template)
     
-    def direct_query(self, sql_query):
-        """Execute SQL query directly and return results"""
-        import sqlite3
+    def generate_sql(self, question):
+        """Generate SQL query for the question"""
+        sql_chain = LLMChain(llm=self.llm, prompt=self.sql_prompt)
+        tables_description = ""
+        for table in self.tables_info:
+            tables_description += f"Table: {table['name']}\n"
+            tables_description += f"Columns: {', '.join(table['columns'])}\n\n"
         
+        result = sql_chain.run(tables_description=tables_description, question=question)
+        return self.clean_sql_response(result)
+    
+    def clean_sql_response(self, sql_response):
+        """Clean the SQL response to extract just the SQL query"""
+        sql_response = re.sub(r'```sql|```', '', sql_response)
+        sql_response = sql_response.strip()
+        return sql_response
+    
+    def execute_sql(self, sql_query):
+        """Execute SQL query and return results as DataFrame"""
         try:
-            # Connect to the database
+            print(f"Executing SQL: {sql_query}")
             conn = sqlite3.connect(self.db_path)
-            
-            # Execute the query
             df = pd.read_sql_query(sql_query, conn)
-            
-            # Close connection
+            print(f"Query returned {len(df)} rows")
             conn.close()
-            
             return df
         except Exception as e:
-            return f"Error executing query: {str(e)}"
-    
-    def query(self, question: str) -> str:
-        """
-        Process a natural language question and return an answer based on the database
-        
-        Args:
-            question: Natural language question about the data
+            print(f"Error executing SQL: {e}")
             
-        Returns:
-            Answer from the agent
-        """
+            if "no such table" in str(e).lower():
+                # List available tables
+                conn = sqlite3.connect(self.db_path)
+                cursor = conn.cursor()
+                cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
+                tables = [t[0] for t in cursor.fetchall()]
+                conn.close()
+                print(f"Available tables: {', '.join(tables)}")
+            
+            return pd.DataFrame()
+    
+    def generate_answer(self, question, sql_query, query_results):
+        """Generate a natural language answer"""
+        answer_chain = LLMChain(llm=self.llm, prompt=self.answer_prompt)
+        
+        if query_results.empty:
+            results_str = "No results found."
+        else:
+            results_str = query_results.to_string()
+        
+        result = answer_chain.run(
+            question=question,
+            sql_query=sql_query,
+            query_results=results_str
+        )
+        return result.strip()
+    
+    def query(self, question):
+        """Process a natural language query and return results"""
         try:
-            # Check for specific common questions that can be handled directly
-            question_lower = question.lower()
+            sql_query = self.generate_sql(question)
             
-            # Direct handling for common simple queries
-            if "how many employees" in question_lower and "walmart" in question_lower:
-                # Execute direct SQL query for this specific case
-                df = self.direct_query("SELECT company, number_of_employees FROM fortune1000 WHERE company = 'Walmart'")
-                if isinstance(df, pd.DataFrame) and not df.empty:
-                    return f"Walmart has {df['number_of_employees'].values[0]:,} employees."
+            data = self.execute_sql(sql_query)
             
-            # Direct handling for rank questions
-            rank_match = re.search(r'(which|what).*company.*rank\s+(\d+)', question_lower)
-            if rank_match:
-                rank = rank_match.group(2)
-                df = self.direct_query(f"SELECT company FROM fortune1000 WHERE rank = {rank}")
-                if isinstance(df, pd.DataFrame) and not df.empty:
-                    return f"{df['company'].values[0]}"
+            answer = self.generate_answer(question, sql_query, data)
             
-            # Add context about the table structure to help the agent
-            context = ""
-            if self.table_info:
-                context = f"The query is about the {self.table_info['name']} table. "
-                context += f"The table has these columns: {', '.join(self.table_info['columns'])}. "
-            
-            # Enhanced question with clear instructions to provide only the direct answer
-            enhanced_question = (f"{context}{question}\n\n"
-                              "Important instructions: \n"
-                              "1. DO NOT show any SQL commands in your response\n"
-                              "2. DO NOT explain your thought process or reasoning\n"
-                              "3. DO NOT prefix your answer with phrases like 'The answer is' or 'Based on the data'\n"
-                              "4. ONLY provide the specific answer to the question - be direct and concise\n"
-                              "5. Include actual values/numbers in your answer\n")
-            
-            # Get response from the agent
-            response = self.agent.invoke({"input": enhanced_question})
-            
-            # Extract just the final answer from the response
-            raw_answer = response.get("output", "")
-            
-            # Clean the answer to remove any SQL or explanations
-            clean_answer = self._clean_response(raw_answer, question)
-            
-            return clean_answer
-        
+            return {
+                "answer": answer,
+                "sql_query": sql_query,
+                "data": data
+            }
         except Exception as e:
-            return f"Error processing your question: {str(e)}"
-    
-    def _clean_response(self, response: str, question: str) -> str:
-        """Clean the response to contain only the direct answer"""
-        
-        # Remove any SQL code blocks or inline SQL
-        response = re.sub(r'```sql.*?```', '', response, flags=re.DOTALL)
-        response = re.sub(r'SELECT.*?FROM.*?;', '', response, flags=re.DOTALL)
-        
-        # Remove phrases that indicate thinking or analysis
-        thinking_phrases = [
-            "Based on the question,", "Based on the data,", "After executing the query,",
-            "The query I will execute", "To answer this question", "I'll query the",
-            "Looking at the data", "According to the database", "The SQL query shows",
-            "The results show", "The answer is", "I found that"
-        ]
-        
-        for phrase in thinking_phrases:
-            response = response.replace(phrase, "")
-        
-        # Handle specific question types with cleaner responses
-        if "rank" in question.lower() and "company" in question.lower():
-            # For rank questions, try to extract just the company name
-            company_match = re.search(r'is\s+([A-Za-z0-9\s\.&]+)\.?$', response)
-            if company_match:
-                return company_match.group(1).strip()
-        
-        # Further clean the response
-        response = response.strip()
-        response = re.sub(r'^[,:]\s*', '', response)  # Remove leading punctuation
-        response = re.sub(r'\s+', ' ', response)      # Normalize whitespace
-        
-        return response
+            return {
+                "answer": f"Sorry, I encountered an error: {str(e)}",
+                "sql_query": "",
+                "data": None
+            }

@@ -1,13 +1,14 @@
-# Fortune 1000 RAG SQL Assistant
+# Multi-Dataset RAG SQL Assistant
 
-This project demonstrates a Retrieval-Augmented Generation (RAG) system using LangChain's SQL Agent and Google's Gemini Flash 2.0 LLM to answer questions about Fortune 1000 companies data.
+This project demonstrates a Retrieval-Augmented Generation (RAG) system using LangChain's SQL Agent and Google's Gemini Flash 2.0 LLM to answer questions about any dataset loaded from CSV files.
 
 ## Features
 
-- Converts CSV data to a queryable SQLite database
+- Automatically loads any CSV files from the data folder into a queryable SQLite database
 - Uses LangChain with Google's Gemini Flash 2.0 for natural language to SQL translation
 - Provides a friendly Streamlit UI for asking questions
 - Answers questions by generating SQL queries and retrieving relevant information
+- Intelligently determines which dataset to query based on the question
 
 ## Setup
 
@@ -18,22 +19,26 @@ This project demonstrates a Retrieval-Augmented Generation (RAG) system using La
    ```
 3. Get a Google API key for Gemini from https://ai.google.dev/
 4. Add your API key to the `.env` file or enter it in the app when prompted
-5. Run the application:
+5. Add your CSV files to the `data` folder
+6. Run the application:
    ```
    streamlit run app.py
    ```
 
 ## How It Works
 
-1. The application loads the Fortune 1000 CSV data into an SQLite database
+1. The application automatically loads all CSV files from the data folder into an SQLite database
 2. When you ask a question in natural language, the Gemini LLM translates it to an SQL query
-3. The query is executed against the database to retrieve relevant information
-4. The LLM formats the results into a natural language response
+3. The system determines which table(s) in the database are most relevant to your question
+4. The query is executed against the database to retrieve relevant information
+5. The LLM formats the results into a natural language response
 
 ## Example Questions
 
-- Which companies in the technology sector have the highest revenue?
-- Who are the female CEOs of Fortune 1000 companies?
-- What's the average market value of companies in the Financials sector?
-- Which states have the most Fortune 1000 headquarters?
-- How many companies are in each industry category?
+The types of questions you can ask depend on the datasets you've loaded. Here are some examples:
+
+- Which items have the highest sales value?
+- What is the average age of customers in the database?
+- Show me the trends in product categories over the last year
+- Which regions have the highest customer satisfaction scores?
+- How many records are in each dataset?
