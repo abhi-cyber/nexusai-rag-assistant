@@ -68,21 +68,33 @@ def webhook():
     
     try:
         sql_agent = init_sql_agent()
-        if not sql_agent:
-            resp.message("Sorry, I couldn't initialize the SQL agent to answer your question.")
-            return str(resp)
-            
-        result = sql_agent.query(incoming_msg)
+        jira_agent = init_jira_agent()
         
-        if result and "answer" in result:
-            answer = result["answer"]
+        incoming_msg_lower = incoming_msg.lower()
+        is_jira_query = any(keyword in incoming_msg_lower for keyword in ["jira", "ticket", "issue", "project"])
+        
+        if is_jira_query and jira_agent and jira_agent.is_initialized():
+            result = jira_agent.query(incoming_msg)
+            if result:
+                if len(result) > 1500:
+                    result = result[:1500] + "... (message truncated due to length)"
+                resp.message(result)
+            else:
+                resp.message("I'm sorry, I couldn't find an answer to your Jira question.")
+        elif sql_agent:
+            result = sql_agent.query(incoming_msg)
             
-            if len(answer) > 1500:
-                answer = answer[:1500] + "... (message truncated due to length)"
+            if result and "answer" in result:
+                answer = result["answer"]
                 
-            resp.message(answer)
+                if len(answer) > 1500:
+                    answer = answer[:1500] + "... (message truncated due to length)"
+                    
+                resp.message(answer)
+            else:
+                resp.message("I'm sorry, I couldn't find an answer to your question.")
         else:
-            resp.message("I'm sorry, I couldn't find an answer to your question.")
+            resp.message("Sorry, I couldn't initialize the appropriate agent to answer your question.")
             
     except Exception as e:
         logger.error(f"Error processing message: {str(e)}")
