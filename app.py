@@ -6,6 +6,7 @@ from dotenv import load_dotenv
 from src.load_data import load_all_csvs_to_sqlite, get_all_tables_info, debug_database
 from src.sql_agent import SQLQueryAgent
 from src.jira_agent import JiraQueryAgent
+from src.whatsapp_agent import WhatsAppAgent
 
 # Load environment variables
 load_dotenv()
@@ -75,6 +76,17 @@ def init_jira_agent():
     
     # Create the Jira agent
     return JiraQueryAgent(api_key, jira_config)
+
+def init_whatsapp_agent():
+    """Initialize the WhatsApp agent with stored credentials"""
+    account_sid = st.session_state.get("twilio_account_sid", "")
+    auth_token = st.session_state.get("twilio_auth_token", "")
+    from_number = st.session_state.get("twilio_whatsapp_number", "")
+    
+    if not account_sid or not auth_token or not from_number:
+        return None
+    
+    return WhatsAppAgent(account_sid, auth_token, from_number)
 
 def jira_settings():
     """UI for Jira settings configuration"""
@@ -161,6 +173,113 @@ def jira_settings():
     else:
         st.info("Complete your Jira connection setup above to use the Jira Assistant.")
 
+def whatsapp_settings():
+    """UI for WhatsApp settings configuration"""
+    st.subheader("WhatsApp Integration Settings")
+    
+    # Initialize session state for WhatsApp settings
+    if "twilio_account_sid" not in st.session_state:
+        st.session_state.twilio_account_sid = ""
+    if "twilio_auth_token" not in st.session_state:
+        st.session_state.twilio_auth_token = ""
+    if "twilio_whatsapp_number" not in st.session_state:
+        st.session_state.twilio_whatsapp_number = ""
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.session_state.twilio_account_sid = st.text_input(
+            "Twilio Account SID", 
+            value=st.session_state.twilio_account_sid
+        )
+    
+    with col2:
+        st.session_state.twilio_auth_token = st.text_input(
+            "Twilio Auth Token", 
+            type="password", 
+            value=st.session_state.twilio_auth_token
+        )
+    
+    st.session_state.twilio_whatsapp_number = st.text_input(
+        "WhatsApp Number (with country code, e.g., +14155238886)", 
+        value=st.session_state.twilio_whatsapp_number
+    )
+    
+    # Test connection button
+    if st.button("Test Twilio Connection"):
+        with st.spinner("Testing connection to Twilio..."):
+            agent = init_whatsapp_agent()
+            if agent and agent.is_initialized():
+                result = agent.verify_connection()
+                if result["status"] == "success":
+                    st.success(result["message"])
+                else:
+                    st.error(result["message"])
+            else:
+                st.error("Failed to initialize WhatsApp connection. Please check your credentials.")
+    
+    # Display webhook URL for configuration
+    st.markdown("---")
+    st.subheader("Webhook Setup Instructions")
+    st.markdown("""
+    To receive WhatsApp messages, you need to configure a webhook in your Twilio dashboard:
+    
+    1. Deploy this application somewhere publicly accessible (Heroku, AWS, etc.)
+    2. Set your Twilio WhatsApp webhook URL to:
+       `https://your-app-url.com/webhook`
+    3. Make sure the webhook is configured to send HTTP POST requests
+    
+    For local development, you can use tools like ngrok:
+    ```
+    ngrok http 5001
+    ```
+    Then use the ngrok URL + `/webhook` as your webhook URL in the Twilio dashboard.
+    """)
+    
+    st.markdown("---")
+    
+    # WhatsApp messaging interface
+    st.subheader("Send WhatsApp Message")
+    
+    agent = init_whatsapp_agent()
+    
+    if agent and agent.is_initialized():
+        # Get all tables information to display datasets
+        try:
+            tables_info = get_all_tables_info(DB_PATH)
+            dataset_names = [table['name'].replace('_', ' ').title() for table in tables_info]
+            
+            # Display available datasets
+            with st.expander("Available datasets for queries", expanded=False):
+                for name in dataset_names:
+                    st.write(f"- {name}")
+        except:
+            pass
+            
+        col1, col2 = st.columns([2, 1])
+        
+        with col1:
+            message = st.text_area("Message to send:", height=100)
+        
+        with col2:
+            to_number = st.text_input(
+                "Recipient's WhatsApp number (with country code, e.g., +1234567890):"
+            )
+        
+        # Send button
+        if st.button("Send WhatsApp Message"):
+            if message and to_number:
+                with st.spinner("Sending message..."):
+                    result = agent.send_message(to_number, message)
+                    if result["status"] == "success":
+                        st.success(f"Message sent successfully! {result.get('details', '')}")
+                    else:
+                        st.error(result["message"])
+            else:
+                st.warning("Please enter both a message and a recipient number.")
+    else:
+        st.info("Complete your WhatsApp configuration above to use the messaging feature.")
+
 def main():
     st.set_page_config(page_title="Dataset SQL Assistant", layout="wide")
     
@@ -177,7 +296,7 @@ def main():
     else:
         agent = None
     
-    tab1, tab2 = st.tabs(["Query Datasets", "Jira Settings"])
+    tab1, tab2, tab3 = st.tabs(["Query Datasets", "Jira Settings", "WhatsApp Integration"])
     
     with tab1:
         if has_data and agent:
@@ -214,6 +333,9 @@ def main():
     
     with tab2:
         jira_settings()
+        
+    with tab3:
+        whatsapp_settings()
 
 if __name__ == "__main__":
     main()
