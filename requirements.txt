@@ -6,7 +6,7 @@ python-dotenv==1.0.0
 google-generativeai==0.3.2
 langchain-community==0.0.17
 langchain-core>=0.1.16,<0.2.0
-langchain-experimental==0.0.47
+langchain-experimental==0.0.61
 streamlit==1.32.0
 atlassian-python-api>=3.30.0
 twilio==8.5.0
